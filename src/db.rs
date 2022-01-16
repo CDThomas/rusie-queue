@@ -13,10 +13,6 @@ pub async fn connect(database_url: &str) -> Result<DB, crate::Error> {
 }
 
 pub async fn migrate(db: &DB) -> Result<(), crate::Error> {
-    match sqlx::migrate!("./migrations").run(db).await {
-        Ok(_) => Ok(()),
-        Err(err) => Err(err),
-    }?;
-
+    sqlx::migrate!("./migrations").run(db).await?;
     Ok(())
 }

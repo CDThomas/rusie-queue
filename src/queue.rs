@@ -22,7 +22,7 @@ pub struct Job {
     pub message: Message,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
 pub enum Message {
     SendSignInEmail {
         email: String,

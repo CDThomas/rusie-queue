@@ -83,6 +83,7 @@ impl Queue for PostgresQueue {
             .bind(message)
             .execute(&self.db)
             .await?;
+
         Ok(())
     }
 
@@ -105,9 +106,22 @@ impl Queue for PostgresQueue {
             .bind(job_id)
             .execute(&self.db)
             .await?;
+
         Ok(())
     }
 
+    // TODO: test
+    //  * pulls correct number of jobs
+    //  * only pulls jobs with correct status, scheduled for, and failed attempts
+    //  * returns jobs to run
+    //  * Status of jobs is updated
+    //  * Updated at is updated
+    //  * Subsequent pulls will not pull the same job
+    //  * Concurrent pulls can't pull the same job
+    //    * Might test this at the integration level and start a few workers and make
+    //      sure that all of the runs are unique. Retries could be on different workers
+    //      though.
+    //  *
     async fn pull(&self, number_of_jobs: u32) -> Result<Vec<Job>, crate::Error> {
         let number_of_jobs = if number_of_jobs > 100 {
             100
@@ -127,6 +141,8 @@ impl Queue for PostgresQueue {
             )
             RETURNING *";
 
+        // Why query_as into a PG job and then map into Job?
+
         let jobs: Vec<PostgresJob> = sqlx::query_as::<_, PostgresJob>(query)
             .bind(PostgresJobStatus::Running)
             .bind(now)
@@ -144,5 +160,78 @@ impl Queue for PostgresQueue {
 
         sqlx::query(query).execute(&self.db).await?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db;
+
+    struct Context {
+        db: DB,
+        queue: PostgresQueue,
+        message: Message,
+    }
+
+    async fn setup_db() -> DB {
+        let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL not set");
+
+        let db = db::connect(&database_url)
+            .await
+            .expect("failed to connect to DB");
+
+        // TODO: use a transaction rather than truncating so that tests can run in parallel.
+        // Have to run tests with `cargo test -- --test-threads=1` if using `TRUNCATE` before
+        // each test.
+        sqlx::query("TRUNCATE TABLE queue")
+            .execute(&db)
+            .await
+            .expect("failed to truncate queue table");
+
+        db
+    }
+
+    async fn setup() -> Context {
+        let db = setup_db().await;
+        let queue = PostgresQueue::new(db.clone());
+        let message = Message::SendSignInEmail {
+            email: String::from("test@test.com"),
+            name: String::from("Drew"),
+            code: String::from("abc"),
+        };
+
+        Context { queue, db, message }
+    }
+
+    #[tokio::test]
+    async fn test_push_succeeds() {
+        let Context { queue, message, .. } = setup().await;
+
+        let result = queue.push(message, None).await.expect("push failed");
+
+        assert_eq!(result, ());
+    }
+
+    #[tokio::test]
+    async fn test_push_pushes_job_to_queue() {
+        let Context { queue, db, message } = setup().await;
+
+        let scheduled_for = chrono::Utc::now() + chrono::Duration::seconds(10);
+
+        queue
+            .push(message.clone(), Some(scheduled_for))
+            .await
+            .expect("push failed");
+
+        let job = sqlx::query_as::<_, PostgresJob>("SELECT * FROM queue")
+            .fetch_one(&db)
+            .await
+            .expect("select failed");
+
+        assert_eq!(job.scheduled_for, scheduled_for);
+        assert_eq!(job.failed_attempts, 0);
+        assert_eq!(job.status, PostgresJobStatus::Queued);
+        assert_eq!(job.message.0, message);
     }
 }

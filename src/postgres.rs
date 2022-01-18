@@ -89,8 +89,8 @@ impl Queue for PostgresQueue {
 
     async fn delete_job(&self, job_id: Uuid) -> Result<(), crate::Error> {
         let query = "DELETE FROM queue WHERE id = $1";
-
         sqlx::query(query).bind(job_id).execute(&self.db).await?;
+
         Ok(())
     }
 
@@ -142,7 +142,6 @@ impl Queue for PostgresQueue {
             RETURNING *";
 
         // Why query_as into a PG job and then map into Job?
-
         let jobs: Vec<PostgresJob> = sqlx::query_as::<_, PostgresJob>(query)
             .bind(PostgresJobStatus::Running)
             .bind(now)
@@ -152,6 +151,7 @@ impl Queue for PostgresQueue {
             .bind(number_of_jobs)
             .fetch_all(&self.db)
             .await?;
+
         Ok(jobs.into_iter().map(Into::into).collect())
     }
 
@@ -204,6 +204,14 @@ mod tests {
         Context { queue, db, message }
     }
 
+    async fn all_jobs(db: &DB) -> Result<Vec<PostgresJob>, crate::Error> {
+        let jobs = sqlx::query_as::<_, PostgresJob>("SELECT * FROM queue")
+            .fetch_all(db)
+            .await?;
+
+        Ok(jobs)
+    }
+
     #[tokio::test]
     async fn test_push_succeeds() {
         let Context { queue, message, .. } = setup().await;
@@ -224,14 +232,76 @@ mod tests {
             .await
             .expect("push failed");
 
-        let job = sqlx::query_as::<_, PostgresJob>("SELECT * FROM queue")
+        let jobs = all_jobs(&db).await.expect("failed to fetch all jobs");
+
+        assert_eq!(jobs.len(), 1);
+        assert_eq!(jobs[0].scheduled_for, scheduled_for);
+        assert_eq!(jobs[0].failed_attempts, 0);
+        assert_eq!(jobs[0].status, PostgresJobStatus::Queued);
+        assert_eq!(jobs[0].message.0, message);
+    }
+
+    #[tokio::test]
+    async fn test_delete_deletes_job() {
+        let Context { queue, db, message } = setup().await;
+
+        queue.push(message, None).await.expect("push failed");
+
+        let jobs = all_jobs(&db).await.expect("failed to fetch all jobs");
+
+        queue.delete_job(jobs[0].id).await.expect("delete failed");
+
+        let result = sqlx::query!("SELECT COUNT(*) as job_count FROM queue")
             .fetch_one(&db)
             .await
-            .expect("select failed");
+            .expect("count failed");
 
-        assert_eq!(job.scheduled_for, scheduled_for);
-        assert_eq!(job.failed_attempts, 0);
-        assert_eq!(job.status, PostgresJobStatus::Queued);
-        assert_eq!(job.message.0, message);
+        assert_eq!(result.job_count.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_delete_deletes_only_given_job() {
+        let Context { queue, db, message } = setup().await;
+
+        queue
+            .push(message.clone(), None)
+            .await
+            .expect("push failed");
+
+        queue.push(message, None).await.expect("push failed");
+
+        let jobs_before_delete = all_jobs(&db).await.expect("failed to fetch all jobs");
+
+        assert_eq!(jobs_before_delete.len(), 2);
+
+        queue
+            .delete_job(jobs_before_delete[0].id)
+            .await
+            .expect("delete failed");
+
+        let jobs_after_delete = all_jobs(&db).await.expect("failed to fetch all jobs");
+
+        assert_eq!(jobs_after_delete.len(), 1);
+        assert_eq!(jobs_after_delete[0].id, jobs_before_delete[1].id);
+    }
+
+    #[tokio::test]
+    async fn test_clear_clears_all_jobs() {
+        let Context { queue, db, message } = setup().await;
+
+        queue
+            .push(message.clone(), None)
+            .await
+            .expect("push failed");
+        queue.push(message, None).await.expect("push failed");
+
+        queue.clear().await.expect("clear failed");
+
+        let result = sqlx::query!("SELECT COUNT(*) as job_count FROM queue")
+            .fetch_one(&db)
+            .await
+            .expect("count failed");
+
+        assert_eq!(result.job_count.unwrap(), 0);
     }
 }

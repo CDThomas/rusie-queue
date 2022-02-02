@@ -33,6 +33,8 @@ struct PostgresJob {
 enum PostgresJobStatus {
     Queued,
     Running,
+    // TODO:
+    // This status isn't actually used in the original code. Should it be?
     Failed,
 }
 
@@ -101,6 +103,7 @@ impl Queue for PostgresQueue {
             WHERE id = $3";
 
         sqlx::query(query)
+            // TODO: does status really need to be set at all here?
             .bind(PostgresJobStatus::Queued)
             .bind(now)
             .bind(job_id)
@@ -303,5 +306,25 @@ mod tests {
             .expect("count failed");
 
         assert_eq!(result.job_count.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_fail_fails_given_job() {
+        let Context { queue, db, message } = setup().await;
+
+        queue.push(message, None).await.expect("push failed");
+
+        let job = &all_jobs(&db).await.expect("failed to fetch all jobs")[0];
+
+        assert_eq!(job.failed_attempts, 0);
+        assert_eq!(job.status, PostgresJobStatus::Queued);
+
+        queue.fail_job(job.id).await.expect("failed to fail job");
+
+        let failed_job = &all_jobs(&db).await.expect("failed to fetch all jobs")[0];
+
+        assert_eq!(failed_job.failed_attempts, 1);
+        assert_eq!(failed_job.status, PostgresJobStatus::Queued);
+        assert!(failed_job.updated_at > job.updated_at);
     }
 }

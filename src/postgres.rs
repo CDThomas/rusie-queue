@@ -33,9 +33,6 @@ struct PostgresJob {
 enum PostgresJobStatus {
     Queued,
     Running,
-    // TODO:
-    // This status isn't actually used in the original code. Should it be?
-    Failed,
 }
 
 impl From<PostgresJob> for Job {
@@ -150,6 +147,7 @@ impl Queue for PostgresQueue {
             .bind(now)
             .bind(PostgresJobStatus::Queued)
             .bind(now)
+            // TODO: use config val rather than const
             .bind(MAX_FAILED_ATTEMPTS)
             .bind(number_of_jobs)
             .fetch_all(&self.db)

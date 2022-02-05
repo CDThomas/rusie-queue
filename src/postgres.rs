@@ -111,17 +111,11 @@ impl Queue for PostgresQueue {
     }
 
     // TODO: test
-    //  * pulls correct number of jobs
     //  * only pulls jobs with correct status, scheduled for, and failed attempts
-    //  * returns jobs to run
-    //  * Status of jobs is updated
-    //  * Updated at is updated
-    //  * Subsequent pulls will not pull the same job
     //  * Concurrent pulls can't pull the same job
     //    * Might test this at the integration level and start a few workers and make
     //      sure that all of the runs are unique. Retries could be on different workers
     //      though.
-    //  *
     async fn pull(&self, number_of_jobs: u32) -> Result<Vec<Job>, crate::Error> {
         let number_of_jobs = if number_of_jobs > 100 {
             100
@@ -325,4 +319,72 @@ mod tests {
         assert_eq!(failed_job.status, PostgresJobStatus::Queued);
         assert!(failed_job.updated_at > job.updated_at);
     }
+
+    #[tokio::test]
+    async fn test_pull_pulls_correct_number_of_jobs() {
+        let Context { queue, message, .. } = setup().await;
+
+        queue
+            .push(message.clone(), None)
+            .await
+            .expect("push failed");
+        queue.push(message, None).await.expect("push failed");
+
+        let jobs = queue.pull(1).await.expect("failed to pull jobs");
+
+        assert_eq!(jobs.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_pull_updates_status_to_running() {
+        let Context { queue, db, message } = setup().await;
+
+        queue.push(message, None).await.expect("push failed");
+
+        let job = &queue.pull(1).await.expect("failed to pull jobs")[0];
+
+        let db_job = &all_jobs(&db).await.expect("failed to fetch jobs")[0];
+
+        assert_eq!(job.id, db_job.id);
+        assert_eq!(db_job.status, PostgresJobStatus::Running);
+    }
+
+    #[tokio::test]
+    async fn test_pull_updates_updated_at_timestamp() {
+        let Context { queue, db, message } = setup().await;
+
+        queue.push(message, None).await.expect("push failed");
+
+        let db_job_before_pull = &all_jobs(&db).await.expect("failed to fetch jobs")[0];
+
+        let job = &queue.pull(1).await.expect("failed to pull jobs")[0];
+
+        let db_job_after_pull = &all_jobs(&db).await.expect("failed to fetch jobs")[0];
+
+        assert_eq!(job.id, db_job_before_pull.id);
+        assert_eq!(db_job_after_pull.id, db_job_before_pull.id);
+        assert!(db_job_before_pull.updated_at < db_job_after_pull.updated_at);
+    }
+
+    #[tokio::test]
+    async fn test_pull_pulls_queued_jobs_in_scheduled_order() {
+        let Context { queue, db, message } = setup().await;
+
+        queue
+            .push(message.clone(), None)
+            .await
+            .expect("push failed");
+        queue.push(message, None).await.expect("push failed");
+
+        let db_jobs = all_jobs(&db).await.expect("failed to fetch jobs");
+
+        let job_1 = &queue.pull(1).await.expect("failed to pull jobs")[0];
+        let job_2 = &queue.pull(1).await.expect("failed to pull jobs")[0];
+
+        assert_eq!(db_jobs[0].id, job_1.id);
+        assert_eq!(db_jobs[1].id, job_2.id);
+    }
+
+    // TODO: doesn't pull scheduled > now
+    // TODO: does pull when failed attempts > configured amount
 }

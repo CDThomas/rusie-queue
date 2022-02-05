@@ -27,7 +27,6 @@ struct PostgresJob {
     message: Json<Message>,
 }
 
-// We use a INT postgres representation for performance reasons
 #[derive(Debug, Clone, sqlx::Type, PartialEq)]
 #[repr(i32)]
 enum PostgresJobStatus {
@@ -48,6 +47,7 @@ impl PostgresQueue {
     pub fn new(db: DB) -> PostgresQueue {
         let queue = PostgresQueue {
             db,
+            // TODO: actually use this and make configurable
             max_attempts: 5,
         };
 
@@ -100,7 +100,6 @@ impl Queue for PostgresQueue {
             WHERE id = $3";
 
         sqlx::query(query)
-            // TODO: does status really need to be set at all here?
             .bind(PostgresJobStatus::Queued)
             .bind(now)
             .bind(job_id)
@@ -110,12 +109,6 @@ impl Queue for PostgresQueue {
         Ok(())
     }
 
-    // TODO: test
-    //  * only pulls jobs with correct status, scheduled for, and failed attempts
-    //  * Concurrent pulls can't pull the same job
-    //    * Might test this at the integration level and start a few workers and make
-    //      sure that all of the runs are unique. Retries could be on different workers
-    //      though.
     async fn pull(&self, number_of_jobs: u32) -> Result<Vec<Job>, crate::Error> {
         let number_of_jobs = if number_of_jobs > 100 {
             100
@@ -367,7 +360,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_pull_pulls_queued_jobs_in_scheduled_order() {
+    async fn test_pull_only_pulls_queued_jobs() {
         let Context { queue, db, message } = setup().await;
 
         queue
@@ -385,6 +378,94 @@ mod tests {
         assert_eq!(db_jobs[1].id, job_2.id);
     }
 
-    // TODO: doesn't pull scheduled > now
-    // TODO: does pull when failed attempts > configured amount
+    #[tokio::test]
+    async fn test_pull_pulls_queued_jobs_in_scheduled_order() {
+        let Context { queue, db, message } = setup().await;
+        let ten_seconds_ago = chrono::Utc::now() - chrono::Duration::seconds(10);
+        let five_seconds_ago = chrono::Utc::now() - chrono::Duration::seconds(5);
+
+        queue
+            .push(message.clone(), Some(five_seconds_ago))
+            .await
+            .expect("push failed");
+        queue
+            .push(message, Some(ten_seconds_ago))
+            .await
+            .expect("push failed");
+
+        let db_jobs = all_jobs(&db).await.expect("failed to fetch jobs");
+
+        let job_1 = &queue.pull(1).await.expect("failed to pull jobs")[0];
+        let job_2 = &queue.pull(1).await.expect("failed to pull jobs")[0];
+
+        assert_eq!(db_jobs[1].id, job_1.id);
+        assert_eq!(db_jobs[1].scheduled_for, ten_seconds_ago);
+        assert_eq!(db_jobs[0].id, job_2.id);
+        assert_eq!(db_jobs[0].scheduled_for, five_seconds_ago);
+    }
+
+    #[tokio::test]
+    async fn test_pull_only_pulls_scheduled_for_less_than_now() {
+        let Context { queue, message, .. } = setup().await;
+        let one_min_from_now = chrono::Utc::now() + chrono::Duration::minutes(1);
+
+        queue
+            .push(message.clone(), Some(one_min_from_now))
+            .await
+            .expect("push failed");
+
+        let jobs = queue.pull(1).await.expect("failed to pull jobs");
+
+        assert_eq!(jobs.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_pull_pulls_jobs_that_have_failed_less_than_max_attempts() {
+        let Context { queue, db, message } = setup().await;
+
+        queue.push(message, None).await.expect("push failed");
+
+        let db_job = &all_jobs(&db).await.expect("failed to fetch all jobs")[0];
+
+        queue.fail_job(db_job.id).await.expect("failed to fail job");
+
+        let job = &queue.pull(1).await.expect("failed to pull jobs")[0];
+
+        assert_eq!(job.id, db_job.id);
+    }
+
+    #[tokio::test]
+    async fn test_pull_does_not_pull_jobs_that_have_failed_equal_to_max_attempts() {
+        let Context { queue, db, message } = setup().await;
+
+        queue.push(message, None).await.expect("push failed");
+
+        let db_job = &all_jobs(&db).await.expect("failed to fetch all jobs")[0];
+
+        queue.fail_job(db_job.id).await.expect("failed to fail job");
+        queue.fail_job(db_job.id).await.expect("failed to fail job");
+        queue.fail_job(db_job.id).await.expect("failed to fail job");
+
+        let jobs = &queue.pull(1).await.expect("failed to pull jobs");
+
+        assert_eq!(jobs.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_pull_does_not_pull_jobs_that_have_failed_more_than_max_attempts() {
+        let Context { queue, db, message } = setup().await;
+
+        queue.push(message, None).await.expect("push failed");
+
+        let db_job = &all_jobs(&db).await.expect("failed to fetch all jobs")[0];
+
+        queue.fail_job(db_job.id).await.expect("failed to fail job");
+        queue.fail_job(db_job.id).await.expect("failed to fail job");
+        queue.fail_job(db_job.id).await.expect("failed to fail job");
+        queue.fail_job(db_job.id).await.expect("failed to fail job");
+
+        let jobs = &queue.pull(1).await.expect("failed to pull jobs");
+
+        assert_eq!(jobs.len(), 0);
+    }
 }

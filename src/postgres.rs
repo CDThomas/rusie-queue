@@ -13,8 +13,6 @@ pub struct PostgresQueue {
     max_attempts: u32,
 }
 
-const MAX_FAILED_ATTEMPTS: i32 = 3; // low, as most jobs also use retries internally
-
 #[derive(sqlx::FromRow, Debug, Clone)]
 struct PostgresJob {
     id: Uuid,
@@ -47,8 +45,8 @@ impl PostgresQueue {
     pub fn new(db: DB) -> PostgresQueue {
         let queue = PostgresQueue {
             db,
-            // TODO: actually use this and make configurable
-            max_attempts: 5,
+            // TODO: make configurable
+            max_attempts: 3,
         };
 
         queue
@@ -128,14 +126,13 @@ impl Queue for PostgresQueue {
             )
             RETURNING *";
 
-        // Why query_as into a PG job and then map into Job?
         let jobs: Vec<PostgresJob> = sqlx::query_as::<_, PostgresJob>(query)
             .bind(PostgresJobStatus::Running)
             .bind(now)
             .bind(PostgresJobStatus::Queued)
             .bind(now)
             // TODO: use config val rather than const
-            .bind(MAX_FAILED_ATTEMPTS)
+            .bind(self.max_attempts)
             .bind(number_of_jobs)
             .fetch_all(&self.db)
             .await?;
@@ -442,12 +439,15 @@ mod tests {
 
         let db_job = &all_jobs(&db).await.expect("failed to fetch all jobs")[0];
 
-        queue.fail_job(db_job.id).await.expect("failed to fail job");
-        queue.fail_job(db_job.id).await.expect("failed to fail job");
-        queue.fail_job(db_job.id).await.expect("failed to fail job");
+        for _ in 0..queue.max_attempts {
+            queue.fail_job(db_job.id).await.expect("failed to fail job");
+        }
+
+        let db_job_after_fail = &all_jobs(&db).await.expect("failed to fetch all jobs")[0];
 
         let jobs = &queue.pull(1).await.expect("failed to pull jobs");
 
+        assert_eq!(db_job_after_fail.failed_attempts, queue.max_attempts as i32);
         assert_eq!(jobs.len(), 0);
     }
 
@@ -459,13 +459,15 @@ mod tests {
 
         let db_job = &all_jobs(&db).await.expect("failed to fetch all jobs")[0];
 
-        queue.fail_job(db_job.id).await.expect("failed to fail job");
-        queue.fail_job(db_job.id).await.expect("failed to fail job");
-        queue.fail_job(db_job.id).await.expect("failed to fail job");
-        queue.fail_job(db_job.id).await.expect("failed to fail job");
+        for _ in 0..queue.max_attempts + 1 {
+            queue.fail_job(db_job.id).await.expect("failed to fail job");
+        }
+
+        let db_job_after_fail = &all_jobs(&db).await.expect("failed to fetch all jobs")[0];
 
         let jobs = &queue.pull(1).await.expect("failed to pull jobs");
 
+        assert!(db_job_after_fail.failed_attempts > queue.max_attempts as i32);
         assert_eq!(jobs.len(), 0);
     }
 }

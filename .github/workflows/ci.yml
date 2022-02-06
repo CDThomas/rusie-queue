@@ -33,8 +33,10 @@ jobs:
     - name: Start containers
       run: docker-compose up -d
 
-    - name: Create and migrate DB
+    - name: Create DB
       run: sqlx database create
+
+    - name: Migrate DB
       run: sqlx migrate run
 
     - name: Build

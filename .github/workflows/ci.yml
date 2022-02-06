@@ -31,7 +31,7 @@ jobs:
         key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
     - name: Install SQLx CLI
-      run: which sqlx || cargo install sqlx-cli --no-default-features --features native-tls,postgres
+      run: cargo install sqlx-cli --no-default-features --features native-tls,postgres || true
 
     - name: Start PG
       run: |

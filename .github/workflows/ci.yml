@@ -27,11 +27,6 @@ jobs:
           target/
         key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
-    - name: DBG print versions
-      run: |
-        cargo --version
-        rustc --version
-
     - name: Install SQLx CLI
       run: which sqlx || cargo install sqlx-cli --no-default-features --features native-tls,postgres
 

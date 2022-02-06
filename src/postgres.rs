@@ -7,10 +7,12 @@ use sqlx::{self, types::Json};
 use ulid::Ulid;
 use uuid::Uuid;
 
+const DEFAULT_MAX_ATTEMPTS: u32 = 5;
+
 #[derive(Debug, Clone)]
 pub struct PostgresQueue {
-    db: DB,
-    max_attempts: u32,
+    pub(crate) db: DB,
+    pub(crate) max_attempts: u32,
 }
 
 #[derive(sqlx::FromRow, Debug, Clone)]
@@ -45,11 +47,15 @@ impl PostgresQueue {
     pub fn new(db: DB) -> PostgresQueue {
         let queue = PostgresQueue {
             db,
-            // TODO: make configurable
-            max_attempts: 3,
+            max_attempts: DEFAULT_MAX_ATTEMPTS,
         };
 
         queue
+    }
+
+    pub fn max_attempts(mut self, max_attempts: u32) -> Self {
+        self.max_attempts = max_attempts;
+        self
     }
 }
 
@@ -195,6 +201,24 @@ mod tests {
             .await?;
 
         Ok(jobs)
+    }
+
+    #[tokio::test]
+    async fn test_new_sets_default_max_attempts() {
+        let db = setup_db().await;
+        let queue = PostgresQueue::new(db.clone());
+
+        assert_eq!(queue.max_attempts, DEFAULT_MAX_ATTEMPTS);
+    }
+
+    #[tokio::test]
+    async fn test_max_attempts_updates_field() {
+        let db = setup_db().await;
+        let max_attempts = DEFAULT_MAX_ATTEMPTS + 1;
+
+        let queue = PostgresQueue::new(db.clone()).max_attempts(max_attempts);
+
+        assert_eq!(queue.max_attempts, max_attempts);
     }
 
     #[tokio::test]

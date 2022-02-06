@@ -19,7 +19,7 @@ async fn main() -> Result<(), anyhow::Error> {
     let db = db::connect(&database_url).await?;
     db::migrate(&db).await?;
 
-    let queue = Arc::new(PostgresQueue::new(db.clone()));
+    let queue = Arc::new(PostgresQueue::new(db.clone()).max_attempts(3));
 
     // run worker
     let worker_queue = queue.clone(); // queue is an Arc pointer, so we only copy the reference

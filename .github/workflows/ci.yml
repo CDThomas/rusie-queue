@@ -33,7 +33,7 @@ jobs:
         rustc --version
 
     - name: Install SQLx CLI
-      run: cargo install sqlx-cli --no-default-features --features native-tls,postgres
+      run: which sqlx || cargo install sqlx-cli --no-default-features --features native-tls,postgres
 
     - name: Start PG
       run: |
@@ -50,6 +50,3 @@ jobs:
 
     - name: Run tests
       run: cargo test -- --test-threads=1
-
-    # - name: Stop containers
-    #   run: docker-compose down

@@ -230,25 +230,25 @@ mod tests {
         assert_eq!(result, ());
     }
 
-    // #[tokio::test]
-    // async fn test_push_pushes_job_to_queue() {
-    //     let Context { queue, db, message } = setup().await;
+    #[tokio::test]
+    async fn test_push_pushes_job_to_queue() {
+        let Context { queue, db, message } = setup().await;
 
-    //     let scheduled_for = chrono::Utc::now() + chrono::Duration::seconds(10);
+        let scheduled_for = chrono::Utc::now() + chrono::Duration::seconds(10);
 
-    //     queue
-    //         .push(message.clone(), Some(scheduled_for))
-    //         .await
-    //         .expect("push failed");
+        queue
+            .push(message.clone(), Some(scheduled_for))
+            .await
+            .expect("push failed");
 
-    //     let jobs = all_jobs(&db).await.expect("failed to fetch all jobs");
+        let jobs = all_jobs(&db).await.expect("failed to fetch all jobs");
 
-    //     assert_eq!(jobs.len(), 1);
-    //     assert_eq!(jobs[0].scheduled_for, scheduled_for);
-    //     assert_eq!(jobs[0].failed_attempts, 0);
-    //     assert_eq!(jobs[0].status, PostgresJobStatus::Queued);
-    //     assert_eq!(jobs[0].message.0, message);
-    // }
+        assert_eq!(jobs.len(), 1);
+        assert_eq!(jobs[0].scheduled_for, scheduled_for);
+        assert_eq!(jobs[0].failed_attempts, 0);
+        assert_eq!(jobs[0].status, PostgresJobStatus::Queued);
+        assert_eq!(jobs[0].message.0, message);
+    }
 
     #[tokio::test]
     async fn test_delete_deletes_job() {
@@ -399,31 +399,31 @@ mod tests {
         assert_eq!(db_jobs[1].id, job_2.id);
     }
 
-    // #[tokio::test]
-    // async fn test_pull_pulls_queued_jobs_in_scheduled_order() {
-    //     let Context { queue, db, message } = setup().await;
-    //     let ten_seconds_ago = chrono::Utc::now() - chrono::Duration::seconds(10);
-    //     let five_seconds_ago = chrono::Utc::now() - chrono::Duration::seconds(5);
+    #[tokio::test]
+    async fn test_pull_pulls_queued_jobs_in_scheduled_order() {
+        let Context { queue, db, message } = setup().await;
+        let ten_seconds_ago = chrono::Utc::now() - chrono::Duration::seconds(10);
+        let five_seconds_ago = chrono::Utc::now() - chrono::Duration::seconds(5);
 
-    //     queue
-    //         .push(message.clone(), Some(five_seconds_ago))
-    //         .await
-    //         .expect("push failed");
-    //     queue
-    //         .push(message, Some(ten_seconds_ago))
-    //         .await
-    //         .expect("push failed");
+        queue
+            .push(message.clone(), Some(five_seconds_ago))
+            .await
+            .expect("push failed");
+        queue
+            .push(message, Some(ten_seconds_ago))
+            .await
+            .expect("push failed");
 
-    //     let db_jobs = all_jobs(&db).await.expect("failed to fetch jobs");
+        let db_jobs = all_jobs(&db).await.expect("failed to fetch jobs");
 
-    //     let job_1 = &queue.pull(1).await.expect("failed to pull jobs")[0];
-    //     let job_2 = &queue.pull(1).await.expect("failed to pull jobs")[0];
+        let job_1 = &queue.pull(1).await.expect("failed to pull jobs")[0];
+        let job_2 = &queue.pull(1).await.expect("failed to pull jobs")[0];
 
-    //     assert_eq!(db_jobs[1].id, job_1.id);
-    //     assert_eq!(db_jobs[1].scheduled_for, ten_seconds_ago);
-    //     assert_eq!(db_jobs[0].id, job_2.id);
-    //     assert_eq!(db_jobs[0].scheduled_for, five_seconds_ago);
-    // }
+        assert_eq!(db_jobs[1].id, job_1.id);
+        assert_eq!(db_jobs[1].scheduled_for, ten_seconds_ago);
+        assert_eq!(db_jobs[0].id, job_2.id);
+        assert_eq!(db_jobs[0].scheduled_for, five_seconds_ago);
+    }
 
     #[tokio::test]
     async fn test_pull_only_pulls_scheduled_for_less_than_now() {

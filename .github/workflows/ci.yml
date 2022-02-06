@@ -30,14 +30,15 @@ jobs:
     - name: Install SQLx CLI
       run: cargo install sqlx-cli --no-default-features --features native-tls,postgres
 
-    - name: Start containers
-      run: docker-compose up -d
+    - name: Start PG
+      run: |
+        docker-compose up -d
+        docker exec rusie-queue_postgres_1 bash -c "until pg_isready; do sleep 1; done"
 
-    - name: Create DB
-      run: sqlx database create
-
-    - name: Migrate DB
-      run: sqlx migrate run
+    - name: Set up DB
+      run: |
+        sqlx database create
+        sqlx migrate run
 
     - name: Build
       run: cargo build --verbose

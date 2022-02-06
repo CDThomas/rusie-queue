@@ -17,9 +17,25 @@ jobs:
 
     steps:
     - uses: actions/checkout@v2
+    - uses: actions/cache@v2
+      with:
+        path: |
+          ~/.cargo/bin/
+          ~/.cargo/registry/index/
+          ~/.cargo/registry/cache/
+          ~/.cargo/git/db/
+          target/
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+    - name: Install SQLx CLI
+      run: cargo install sqlx-cli --no-default-features --features native-tls,postgres
 
     - name: Start containers
       run: docker-compose up -d
+
+    - name: Create and migrate DB
+      run: sqlx database create
+      run: sqlx migrate run
 
     - name: Build
       run: cargo build --verbose

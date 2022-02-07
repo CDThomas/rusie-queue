@@ -158,6 +158,7 @@ impl Queue for PostgresQueue {
 mod tests {
     use super::*;
     use crate::db;
+    use chrono::SubsecRound;
 
     struct Context {
         db: DB,
@@ -244,7 +245,11 @@ mod tests {
         let jobs = all_jobs(&db).await.expect("failed to fetch all jobs");
 
         assert_eq!(jobs.len(), 1);
-        assert_eq!(jobs[0].scheduled_for, scheduled_for);
+
+        // Timestamps in PG have usec precision. Truncating the timestamps from
+        // chrono ensures that tests won't fail because of precision mismatch on
+        // platforms that return a higher precision than usec for now().
+        assert_eq!(jobs[0].scheduled_for, scheduled_for.trunc_subsecs(6));
         assert_eq!(jobs[0].failed_attempts, 0);
         assert_eq!(jobs[0].status, PostgresJobStatus::Queued);
         assert_eq!(jobs[0].message.0, message);
@@ -419,10 +424,13 @@ mod tests {
         let job_1 = &queue.pull(1).await.expect("failed to pull jobs")[0];
         let job_2 = &queue.pull(1).await.expect("failed to pull jobs")[0];
 
+        // Timestamps in PG have usec precision. Truncating the timestamps from
+        // chrono ensures that tests won't fail because of precision mismatch on
+        // platforms that return a higher precision than usec for now().
         assert_eq!(db_jobs[1].id, job_1.id);
-        assert_eq!(db_jobs[1].scheduled_for, ten_seconds_ago);
+        assert_eq!(db_jobs[1].scheduled_for, ten_seconds_ago.trunc_subsecs(6));
         assert_eq!(db_jobs[0].id, job_2.id);
-        assert_eq!(db_jobs[0].scheduled_for, five_seconds_ago);
+        assert_eq!(db_jobs[0].scheduled_for, five_seconds_ago.trunc_subsecs(6));
     }
 
     #[tokio::test]

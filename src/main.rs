@@ -8,21 +8,30 @@ use serde::Serialize;
 
 pub use error::Error;
 use postgres::{PostgresQueue};
-use queue::{Queue, Task};
+use queue::{Queue, Task, TaskParams};
+
+struct SomeTask {}
 
 #[derive(Debug, Serialize)]
-struct SomeTask {
+struct SomeTaskParams {
     a: u32,
     b: u32,
 }
 
-// Better names? Message and message.handle?
+impl TaskParams for SomeTaskParams {}
+
 #[async_trait::async_trait]
 impl Task for SomeTask {
-    async fn run(&self) -> Result<(), crate::Error> {
-        println!("Running with args: {:?}", self);
-        return ();
-    }
+    type Params = SomeTaskParams;
+
+    // async fn run(&self) -> Result<(), crate::Error> {
+    //     println!("Running with args: {:?}", self);
+    //     return ();
+    // }
+
+    // fn name(&self) -> &'static str {
+    //     "some_task"
+    // }
 }
 
 #[tokio::main]
@@ -36,7 +45,7 @@ async fn main() -> Result<(), anyhow::Error> {
 
     let queue = PostgresQueue::new(db.clone()).max_attempts(3);
 
-    queue.push(SomeTask::new(1, 2)).await?;
+    queue.push(SomeTaskParams { a: 1, b: 2 }).await?;
 
     tokio::spawn(async move { queue.run_worker().await });
 

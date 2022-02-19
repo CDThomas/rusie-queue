@@ -1,6 +1,6 @@
 use crate::{
     db::DB,
-    queue::{Job, Queue, Task},
+    queue::{Job, Queue, TaskParams},
 };
 use chrono;
 use sqlx::{self, types::Json};
@@ -28,7 +28,7 @@ struct PostgresJob {
     scheduled_for: chrono::DateTime<chrono::Utc>,
     failed_attempts: i32,
     status: PostgresJobStatus,
-    message: Json<dyn Task>,
+    message: Json<dyn TaskParams>,
 }
 
 #[derive(Debug, Clone, sqlx::Type, PartialEq)]
@@ -83,20 +83,21 @@ impl PostgresQueue {
                 .for_each_concurrent(CONCURRENCY, |job| async move {
                     let job_id = job.id;
 
-                    let res = match job.message.run().await {
-                        Ok(_) => self.delete_job(job_id).await,
-                        Err(err) => {
-                            println!("run_worker: handling job({}): {}", job_id, &err);
-                            self.fail_job(job_id).await
-                        }
-                    };
+                    println!("pulled message: {:?}", job.message);
+                    // let res = match job.message.run().await {
+                    //     Ok(_) => self.delete_job(job_id).await,
+                    //     Err(err) => {
+                    //         println!("run_worker: handling job({}): {}", job_id, &err);
+                    //         self.fail_job(job_id).await
+                    //     }
+                    // };
 
-                    match res {
-                        Ok(_) => {}
-                        Err(err) => {
-                            println!("run_worker: deleting / failing job: {}", &err);
-                        }
-                    }
+                    // match res {
+                    //     Ok(_) => {}
+                    //     Err(err) => {
+                    //         println!("run_worker: deleting / failing job: {}", &err);
+                    //     }
+                    // }
                 })
                 .await;
 
@@ -110,7 +111,7 @@ impl PostgresQueue {
 impl Queue for PostgresQueue {
     async fn push(
         &self,
-        job: Box<dyn Task>,
+        job: Box<dyn TaskParams>,
         date: Option<chrono::DateTime<chrono::Utc>>,
     ) -> Result<(), crate::Error> {
         let scheduled_for = date.unwrap_or(chrono::Utc::now());

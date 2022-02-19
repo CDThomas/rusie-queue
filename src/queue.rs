@@ -6,7 +6,7 @@ use uuid::Uuid;
 pub trait Queue: Send + Sync + Debug {
     async fn push(
         &self,
-        job: Message,
+        job: Box<dyn Task>,
         scheduled_for: Option<chrono::DateTime<chrono::Utc>>,
     ) -> Result<(), crate::Error>;
     /// pull fetches at most `number_of_jobs` from the queue.
@@ -16,18 +16,13 @@ pub trait Queue: Send + Sync + Debug {
     async fn clear(&self) -> Result<(), crate::Error>;
 }
 
+#[async_trait::async_trait]
+pub trait Task: Debug + Serialize {
+    async fn run(&self) -> Result<(), crate::Error>;
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Job {
     pub id: Uuid,
-    pub message: Message,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
-pub enum Message {
-    SendSignInEmail {
-        email: String,
-        name: String,
-        code: String,
-    },
-    // ...
+    pub message: Box<dyn Task>,
 }

@@ -31,7 +31,7 @@ async fn main() -> Result<(), anyhow::Error> {
         name: "Sylvain Kerkour".to_string(),
         code: "000-000".to_string(),
     };
-    let _ = queue.push(job, None).await; // TODO: handle error
+    let _ = queue.push(serde_json::to_value(&job).unwrap(), None).await; // TODO: handle error
 
     tokio::time::sleep(Duration::from_secs(5)).await;
 
@@ -82,11 +82,7 @@ async fn run_worker(queue: Arc<dyn Queue>) {
 }
 
 async fn handle_job(job: Job) -> Result<(), crate::Error> {
-    match job.message {
-        message @ Message::SendSignInEmail { .. } => {
-            println!("Sending sign in email: {:?}", &message);
-        }
-    };
+    println!("handling job: {:?}: ", job);
 
     Ok(())
 }

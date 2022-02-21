@@ -1,6 +1,6 @@
 use crate::{
     db::DB,
-    queue::{Job, Message, Queue},
+    queue::{Job, Queue},
 };
 use chrono;
 use sqlx::{self, types::Json};
@@ -24,7 +24,7 @@ struct PostgresJob {
     scheduled_for: chrono::DateTime<chrono::Utc>,
     failed_attempts: i32,
     status: PostgresJobStatus,
-    message: Json<Message>,
+    message: Json<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, sqlx::Type, PartialEq)]
@@ -63,12 +63,11 @@ impl PostgresQueue {
 impl Queue for PostgresQueue {
     async fn push(
         &self,
-        job: Message,
+        message: serde_json::Value,
         date: Option<chrono::DateTime<chrono::Utc>>,
     ) -> Result<(), crate::Error> {
         let scheduled_for = date.unwrap_or(chrono::Utc::now());
         let failed_attempts: i32 = 0;
-        let message = Json(job);
         let status = PostgresJobStatus::Queued;
         let now = chrono::Utc::now();
         let job_id: Uuid = Ulid::new().into();
@@ -158,12 +157,13 @@ impl Queue for PostgresQueue {
 mod tests {
     use super::*;
     use crate::db;
+    use crate::queue::Message;
     use chrono::SubsecRound;
 
     struct Context {
         db: DB,
         queue: PostgresQueue,
-        message: Message,
+        message: serde_json::Value,
     }
 
     async fn setup_db() -> DB {
@@ -187,11 +187,12 @@ mod tests {
     async fn setup() -> Context {
         let db = setup_db().await;
         let queue = PostgresQueue::new(db.clone());
-        let message = Message::SendSignInEmail {
+        let message = serde_json::to_value(Message::SendSignInEmail {
             email: String::from("test@test.com"),
             name: String::from("Drew"),
             code: String::from("abc"),
-        };
+        })
+        .unwrap();
 
         Context { queue, db, message }
     }

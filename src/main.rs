@@ -39,7 +39,7 @@ async fn main() -> Result<(), anyhow::Error> {
 }
 
 // Pull this into a separate module
-async fn run_worker(queue: Arc<dyn Queue>) {
+async fn run_worker(queue: Arc<dyn Queue<Message>>) {
     loop {
         let jobs = match queue.pull(CONCURRENCY as u32).await {
             Ok(jobs) => jobs,
@@ -81,7 +81,7 @@ async fn run_worker(queue: Arc<dyn Queue>) {
     }
 }
 
-async fn handle_job(job: Job) -> Result<(), crate::Error> {
+async fn handle_job(job: Job<Message>) -> Result<(), crate::Error> {
     println!("handling job: {:?}: ", job);
 
     Ok(())

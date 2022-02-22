@@ -2,7 +2,10 @@ use crate::{
     db::DB,
     queue::{Job, Queue},
 };
+use async_trait::async_trait;
 use chrono;
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 use sqlx::{self, types::Json};
 use ulid::Ulid;
 use uuid::Uuid;
@@ -16,7 +19,7 @@ pub struct PostgresQueue {
 }
 
 #[derive(sqlx::FromRow, Debug, Clone)]
-struct PostgresJob {
+struct PostgresJob<T: Unpin> {
     id: Uuid,
     created_at: chrono::DateTime<chrono::Utc>,
     updated_at: chrono::DateTime<chrono::Utc>,
@@ -24,7 +27,7 @@ struct PostgresJob {
     scheduled_for: chrono::DateTime<chrono::Utc>,
     failed_attempts: i32,
     status: PostgresJobStatus,
-    message: Json<serde_json::Value>,
+    message: Json<T>,
 }
 
 #[derive(Debug, Clone, sqlx::Type, PartialEq)]
@@ -34,8 +37,8 @@ enum PostgresJobStatus {
     Running,
 }
 
-impl From<PostgresJob> for Job {
-    fn from(item: PostgresJob) -> Self {
+impl<T: Unpin> From<PostgresJob<T>> for Job<T> {
+    fn from(item: PostgresJob<T>) -> Self {
         Job {
             id: item.id,
             message: item.message.0,
@@ -59,13 +62,20 @@ impl PostgresQueue {
     }
 }
 
-#[async_trait::async_trait]
-impl Queue for PostgresQueue {
+#[async_trait]
+impl<T> Queue<T> for PostgresQueue
+where
+    T: Serialize + DeserializeOwned + Send + Unpin,
+{
     async fn push(
         &self,
-        message: serde_json::Value,
+        message: T,
         date: Option<chrono::DateTime<chrono::Utc>>,
-    ) -> Result<(), crate::Error> {
+    ) -> Result<(), crate::Error>
+    where
+        T: 'async_trait,
+    {
+        let message = Json(message);
         let scheduled_for = date.unwrap_or(chrono::Utc::now());
         let failed_attempts: i32 = 0;
         let status = PostgresJobStatus::Queued;
@@ -112,7 +122,7 @@ impl Queue for PostgresQueue {
         Ok(())
     }
 
-    async fn pull(&self, number_of_jobs: u32) -> Result<Vec<Job>, crate::Error> {
+    async fn pull(&self, number_of_jobs: u32) -> Result<Vec<Job<T>>, crate::Error> {
         let number_of_jobs = if number_of_jobs > 100 {
             100
         } else {
@@ -131,7 +141,7 @@ impl Queue for PostgresQueue {
             )
             RETURNING *";
 
-        let jobs: Vec<PostgresJob> = sqlx::query_as::<_, PostgresJob>(query)
+        let jobs: Vec<PostgresJob<T>> = sqlx::query_as::<_, PostgresJob<T>>(query)
             .bind(PostgresJobStatus::Running)
             .bind(now)
             .bind(PostgresJobStatus::Queued)

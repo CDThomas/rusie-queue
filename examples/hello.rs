@@ -10,7 +10,7 @@ use std::time::Duration;
 
 const CONCURRENCY: usize = 50;
 
-#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Debug, Serialize, Deserialize)]
 pub enum Message {
     SendSignInEmail {
         email: String,

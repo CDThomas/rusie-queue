@@ -45,3 +45,6 @@ jobs:
 
     - name: Run tests
       run: cargo test -- --test-threads=1
+
+    - name: Check examples
+      run: cargo check --examples

@@ -2,6 +2,14 @@
 
 ![Rupaul "you better work" meme](./you_better_work.jpeg)
 
+
+## Examples
+
+```
+$ docker-compose up -d # Start PG
+$ cargo run --example hello
+```
+
 ## Development
 
 ### Setup
@@ -18,12 +26,6 @@ $ sqlx database create
 $ sqlx migrate run
 ```
 
-### Running
-
-```
-$ docker-compose up -d # Start PG
-$ cargo run # Run the example
-```
 
 ### Testing
 

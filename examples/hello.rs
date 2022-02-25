@@ -1,23 +1,31 @@
-mod db;
-mod error;
-mod postgres;
-mod queue;
-use std::{sync::Arc, time::Duration};
-
-pub use error::Error;
 use futures::{stream, StreamExt};
-use postgres::*;
-use queue::Message;
+use rusie_queue::error::Error;
+use rusie_queue::postgres::*;
+use serde::{Deserialize, Serialize};
+use sqlx::postgres::PgPoolOptions;
+use sqlx::{Pool, Postgres};
+use std::fmt::Debug;
+use std::sync::Arc;
+use std::time::Duration;
 
 const CONCURRENCY: usize = 50;
+
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+pub enum Message {
+    SendSignInEmail {
+        email: String,
+        name: String,
+        code: String,
+    },
+}
 
 #[tokio::main]
 async fn main() -> Result<(), anyhow::Error> {
     let database_url = std::env::var("DATABASE_URL")
         .map_err(|_| Error::BadConfig("DATABASE_URL env var is missing".to_string()))?;
 
-    let db = db::connect(&database_url).await?;
-    db::migrate(&db).await?;
+    let db = connect(&database_url).await?;
+    migrate(&db).await?;
 
     let queue = Arc::new(PostgresQueue::new(db.clone()).max_attempts(3));
 
@@ -28,17 +36,17 @@ async fn main() -> Result<(), anyhow::Error> {
     // queue job
     let job = Message::SendSignInEmail {
         email: "your@email.com".to_string(),
-        name: "Sylvain Kerkour".to_string(),
+        name: "Rusie Q".to_string(),
         code: "000-000".to_string(),
     };
     let _ = queue.push(job, None).await; // TODO: handle error
 
-    tokio::time::sleep(Duration::from_secs(5)).await;
+    tokio::time::sleep(Duration::from_secs(2)).await;
 
     Ok(())
 }
 
-// Pull this into a separate module
+// TODO: move into rusie_queue
 async fn run_worker(queue: Arc<PostgresQueue>) {
     loop {
         let jobs = match queue.pull::<Message>(CONCURRENCY as u32).await {
@@ -88,5 +96,18 @@ async fn handle_job(job: PostgresJob<Message>) -> Result<(), crate::Error> {
         }
     };
 
+    Ok(())
+}
+
+async fn connect(database_url: &str) -> Result<Pool<Postgres>, sqlx::Error> {
+    PgPoolOptions::new()
+        .max_connections(100)
+        .max_lifetime(Duration::from_secs(30 * 60)) // 30 mins
+        .connect(database_url)
+        .await
+}
+
+pub async fn migrate(db: &Pool<Postgres>) -> Result<(), sqlx::Error> {
+    sqlx::migrate!("./migrations").run(db).await?;
     Ok(())
 }

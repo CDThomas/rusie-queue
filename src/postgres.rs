@@ -1,9 +1,12 @@
-use crate::db::DB;
+use crate::error::Error;
 use chrono;
 use serde::{de::DeserializeOwned, Serialize};
-use sqlx::{self, types::Json};
+use sqlx::types::Json;
+use sqlx::{Pool, Postgres};
 use ulid::Ulid;
 use uuid::Uuid;
+
+type DB = Pool<Postgres>;
 
 const DEFAULT_MAX_ATTEMPTS: u32 = 5;
 
@@ -53,7 +56,7 @@ impl PostgresQueue {
         &self,
         job: A,
         date: Option<chrono::DateTime<chrono::Utc>>,
-    ) -> Result<(), crate::Error> {
+    ) -> Result<(), Error> {
         let scheduled_for = date.unwrap_or(chrono::Utc::now());
         let failed_attempts: i32 = 0;
         let message = Json(job);
@@ -78,14 +81,14 @@ impl PostgresQueue {
         Ok(())
     }
 
-    pub async fn delete_job(&self, job_id: Uuid) -> Result<(), crate::Error> {
+    pub async fn delete_job(&self, job_id: Uuid) -> Result<(), Error> {
         let query = "DELETE FROM queue WHERE id = $1";
         sqlx::query(query).bind(job_id).execute(&self.db).await?;
 
         Ok(())
     }
 
-    pub async fn fail_job(&self, job_id: Uuid) -> Result<(), crate::Error> {
+    pub async fn fail_job(&self, job_id: Uuid) -> Result<(), Error> {
         let now = chrono::Utc::now();
         let query = "UPDATE queue
             SET status = $1, updated_at = $2, failed_attempts = failed_attempts + 1
@@ -104,7 +107,7 @@ impl PostgresQueue {
     pub async fn pull<A: Serialize + DeserializeOwned + Unpin + Send + 'static>(
         &self,
         number_of_jobs: u32,
-    ) -> Result<Vec<PostgresJob<A>>, crate::Error> {
+    ) -> Result<Vec<PostgresJob<A>>, Error> {
         let number_of_jobs = if number_of_jobs > 100 {
             100
         } else {
@@ -128,7 +131,6 @@ impl PostgresQueue {
             .bind(now)
             .bind(PostgresJobStatus::Queued)
             .bind(now)
-            // TODO: use config val rather than const
             .bind(self.max_attempts)
             .bind(number_of_jobs)
             .fetch_all(&self.db)
@@ -137,8 +139,7 @@ impl PostgresQueue {
         Ok(jobs.into_iter().map(Into::into).collect())
     }
 
-    #[allow(unused)]
-    pub async fn clear(&self) -> Result<(), crate::Error> {
+    pub async fn clear(&self) -> Result<(), Error> {
         let query = "DELETE FROM queue";
 
         sqlx::query(query).execute(&self.db).await?;
@@ -149,9 +150,19 @@ impl PostgresQueue {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db;
-    use crate::queue::Message;
     use chrono::SubsecRound;
+    use serde::Deserialize;
+    use sqlx::postgres::PgPoolOptions;
+    use std::time::Duration;
+
+    #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+    pub enum Message {
+        SendSignInEmail {
+            email: String,
+            name: String,
+            code: String,
+        },
+    }
 
     struct Context {
         db: DB,
@@ -159,10 +170,18 @@ mod tests {
         message: Message,
     }
 
+    pub async fn connect(database_url: &str) -> Result<DB, sqlx::Error> {
+        PgPoolOptions::new()
+            .max_connections(100)
+            .max_lifetime(Duration::from_secs(30 * 60)) // 30 mins
+            .connect(database_url)
+            .await
+    }
+
     async fn setup_db() -> DB {
         let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL not set");
 
-        let db = db::connect(&database_url)
+        let db = connect(&database_url)
             .await
             .expect("failed to connect to DB");
 
@@ -191,7 +210,7 @@ mod tests {
 
     async fn all_jobs<A: Serialize + DeserializeOwned + Send + Unpin + 'static>(
         db: &DB,
-    ) -> Result<Vec<PostgresJob<A>>, crate::Error> {
+    ) -> Result<Vec<PostgresJob<A>>, Error> {
         let jobs = sqlx::query_as::<_, PostgresJob<A>>("SELECT * FROM queue")
             .fetch_all(db)
             .await?;

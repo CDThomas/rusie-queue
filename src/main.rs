@@ -6,8 +6,8 @@ use std::{sync::Arc, time::Duration};
 
 pub use error::Error;
 use futures::{stream, StreamExt};
-use postgres::PostgresQueue;
-use queue::{Job, Message, Queue};
+use postgres::*;
+use queue::Message;
 
 const CONCURRENCY: usize = 50;
 
@@ -39,9 +39,9 @@ async fn main() -> Result<(), anyhow::Error> {
 }
 
 // Pull this into a separate module
-async fn run_worker(queue: Arc<dyn Queue>) {
+async fn run_worker(queue: Arc<PostgresQueue>) {
     loop {
-        let jobs = match queue.pull(CONCURRENCY as u32).await {
+        let jobs = match queue.pull::<Message>(CONCURRENCY as u32).await {
             Ok(jobs) => jobs,
             Err(err) => {
                 println!("run_worker: pulling jobs: {}", err);
@@ -81,8 +81,8 @@ async fn run_worker(queue: Arc<dyn Queue>) {
     }
 }
 
-async fn handle_job(job: Job) -> Result<(), crate::Error> {
-    match job.message {
+async fn handle_job(job: PostgresJob<Message>) -> Result<(), crate::Error> {
+    match job.message.0 {
         message @ Message::SendSignInEmail { .. } => {
             println!("Sending sign in email: {:?}", &message);
         }

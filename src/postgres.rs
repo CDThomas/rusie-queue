@@ -1,8 +1,6 @@
-use crate::{
-    db::DB,
-    queue::{Job, Message, Queue},
-};
+use crate::db::DB;
 use chrono;
+use serde::{de::DeserializeOwned, Serialize};
 use sqlx::{self, types::Json};
 use ulid::Ulid;
 use uuid::Uuid;
@@ -16,31 +14,22 @@ pub struct PostgresQueue {
 }
 
 #[derive(sqlx::FromRow, Debug, Clone)]
-struct PostgresJob {
-    id: Uuid,
-    created_at: chrono::DateTime<chrono::Utc>,
-    updated_at: chrono::DateTime<chrono::Utc>,
+pub struct PostgresJob<A: Serialize + DeserializeOwned> {
+    pub id: Uuid,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
 
-    scheduled_for: chrono::DateTime<chrono::Utc>,
-    failed_attempts: i32,
-    status: PostgresJobStatus,
-    message: Json<Message>,
+    pub scheduled_for: chrono::DateTime<chrono::Utc>,
+    pub failed_attempts: i32,
+    pub status: PostgresJobStatus,
+    pub message: Json<A>,
 }
 
 #[derive(Debug, Clone, sqlx::Type, PartialEq)]
 #[repr(i32)]
-enum PostgresJobStatus {
+pub enum PostgresJobStatus {
     Queued,
     Running,
-}
-
-impl From<PostgresJob> for Job {
-    fn from(item: PostgresJob) -> Self {
-        Job {
-            id: item.id,
-            message: item.message.0,
-        }
-    }
 }
 
 impl PostgresQueue {
@@ -59,11 +48,10 @@ impl PostgresQueue {
     }
 }
 
-#[async_trait::async_trait]
-impl Queue for PostgresQueue {
-    async fn push(
+impl PostgresQueue {
+    pub async fn push<A: Serialize + Send>(
         &self,
-        job: Message,
+        job: A,
         date: Option<chrono::DateTime<chrono::Utc>>,
     ) -> Result<(), crate::Error> {
         let scheduled_for = date.unwrap_or(chrono::Utc::now());
@@ -90,14 +78,14 @@ impl Queue for PostgresQueue {
         Ok(())
     }
 
-    async fn delete_job(&self, job_id: Uuid) -> Result<(), crate::Error> {
+    pub async fn delete_job(&self, job_id: Uuid) -> Result<(), crate::Error> {
         let query = "DELETE FROM queue WHERE id = $1";
         sqlx::query(query).bind(job_id).execute(&self.db).await?;
 
         Ok(())
     }
 
-    async fn fail_job(&self, job_id: Uuid) -> Result<(), crate::Error> {
+    pub async fn fail_job(&self, job_id: Uuid) -> Result<(), crate::Error> {
         let now = chrono::Utc::now();
         let query = "UPDATE queue
             SET status = $1, updated_at = $2, failed_attempts = failed_attempts + 1
@@ -113,7 +101,10 @@ impl Queue for PostgresQueue {
         Ok(())
     }
 
-    async fn pull(&self, number_of_jobs: u32) -> Result<Vec<Job>, crate::Error> {
+    pub async fn pull<A: Serialize + DeserializeOwned + Unpin + Send + 'static>(
+        &self,
+        number_of_jobs: u32,
+    ) -> Result<Vec<PostgresJob<A>>, crate::Error> {
         let number_of_jobs = if number_of_jobs > 100 {
             100
         } else {
@@ -132,7 +123,7 @@ impl Queue for PostgresQueue {
             )
             RETURNING *";
 
-        let jobs: Vec<PostgresJob> = sqlx::query_as::<_, PostgresJob>(query)
+        let jobs: Vec<PostgresJob<A>> = sqlx::query_as(query)
             .bind(PostgresJobStatus::Running)
             .bind(now)
             .bind(PostgresJobStatus::Queued)
@@ -146,7 +137,8 @@ impl Queue for PostgresQueue {
         Ok(jobs.into_iter().map(Into::into).collect())
     }
 
-    async fn clear(&self) -> Result<(), crate::Error> {
+    #[allow(unused)]
+    pub async fn clear(&self) -> Result<(), crate::Error> {
         let query = "DELETE FROM queue";
 
         sqlx::query(query).execute(&self.db).await?;
@@ -158,6 +150,7 @@ impl Queue for PostgresQueue {
 mod tests {
     use super::*;
     use crate::db;
+    use crate::queue::Message;
     use chrono::SubsecRound;
 
     struct Context {
@@ -196,8 +189,10 @@ mod tests {
         Context { queue, db, message }
     }
 
-    async fn all_jobs(db: &DB) -> Result<Vec<PostgresJob>, crate::Error> {
-        let jobs = sqlx::query_as::<_, PostgresJob>("SELECT * FROM queue")
+    async fn all_jobs<A: Serialize + DeserializeOwned + Send + Unpin + 'static>(
+        db: &DB,
+    ) -> Result<Vec<PostgresJob<A>>, crate::Error> {
+        let jobs = sqlx::query_as::<_, PostgresJob<A>>("SELECT * FROM queue")
             .fetch_all(db)
             .await?;
 
@@ -242,7 +237,9 @@ mod tests {
             .await
             .expect("push failed");
 
-        let jobs = all_jobs(&db).await.expect("failed to fetch all jobs");
+        let jobs = all_jobs::<Message>(&db)
+            .await
+            .expect("failed to fetch all jobs");
 
         assert_eq!(jobs.len(), 1);
 
@@ -261,7 +258,9 @@ mod tests {
 
         queue.push(message, None).await.expect("push failed");
 
-        let jobs = all_jobs(&db).await.expect("failed to fetch all jobs");
+        let jobs = all_jobs::<Message>(&db)
+            .await
+            .expect("failed to fetch all jobs");
 
         queue.delete_job(jobs[0].id).await.expect("delete failed");
 
@@ -284,7 +283,9 @@ mod tests {
 
         queue.push(message, None).await.expect("push failed");
 
-        let jobs_before_delete = all_jobs(&db).await.expect("failed to fetch all jobs");
+        let jobs_before_delete = all_jobs::<Message>(&db)
+            .await
+            .expect("failed to fetch all jobs");
 
         assert_eq!(jobs_before_delete.len(), 2);
 
@@ -293,7 +294,9 @@ mod tests {
             .await
             .expect("delete failed");
 
-        let jobs_after_delete = all_jobs(&db).await.expect("failed to fetch all jobs");
+        let jobs_after_delete = all_jobs::<Message>(&db)
+            .await
+            .expect("failed to fetch all jobs");
 
         assert_eq!(jobs_after_delete.len(), 1);
         assert_eq!(jobs_after_delete[0].id, jobs_before_delete[1].id);
@@ -325,14 +328,18 @@ mod tests {
 
         queue.push(message, None).await.expect("push failed");
 
-        let job = &all_jobs(&db).await.expect("failed to fetch all jobs")[0];
+        let job = &all_jobs::<Message>(&db)
+            .await
+            .expect("failed to fetch all jobs")[0];
 
         assert_eq!(job.failed_attempts, 0);
         assert_eq!(job.status, PostgresJobStatus::Queued);
 
         queue.fail_job(job.id).await.expect("failed to fail job");
 
-        let failed_job = &all_jobs(&db).await.expect("failed to fetch all jobs")[0];
+        let failed_job = &all_jobs::<Message>(&db)
+            .await
+            .expect("failed to fetch all jobs")[0];
 
         assert_eq!(failed_job.failed_attempts, 1);
         assert_eq!(failed_job.status, PostgresJobStatus::Queued);
@@ -349,7 +356,7 @@ mod tests {
             .expect("push failed");
         queue.push(message, None).await.expect("push failed");
 
-        let jobs = queue.pull(1).await.expect("failed to pull jobs");
+        let jobs = queue.pull::<Message>(1).await.expect("failed to pull jobs");
 
         assert_eq!(jobs.len(), 1);
     }
@@ -360,9 +367,11 @@ mod tests {
 
         queue.push(message, None).await.expect("push failed");
 
-        let job = &queue.pull(1).await.expect("failed to pull jobs")[0];
+        let job = &queue.pull::<Message>(1).await.expect("failed to pull jobs")[0];
 
-        let db_job = &all_jobs(&db).await.expect("failed to fetch jobs")[0];
+        let db_job = &all_jobs::<Message>(&db)
+            .await
+            .expect("failed to fetch jobs")[0];
 
         assert_eq!(job.id, db_job.id);
         assert_eq!(db_job.status, PostgresJobStatus::Running);
@@ -374,11 +383,15 @@ mod tests {
 
         queue.push(message, None).await.expect("push failed");
 
-        let db_job_before_pull = &all_jobs(&db).await.expect("failed to fetch jobs")[0];
+        let db_job_before_pull = &all_jobs::<Message>(&db)
+            .await
+            .expect("failed to fetch jobs")[0];
 
-        let job = &queue.pull(1).await.expect("failed to pull jobs")[0];
+        let job = &queue.pull::<Message>(1).await.expect("failed to pull jobs")[0];
 
-        let db_job_after_pull = &all_jobs(&db).await.expect("failed to fetch jobs")[0];
+        let db_job_after_pull = &all_jobs::<Message>(&db)
+            .await
+            .expect("failed to fetch jobs")[0];
 
         assert_eq!(job.id, db_job_before_pull.id);
         assert_eq!(db_job_after_pull.id, db_job_before_pull.id);
@@ -395,10 +408,12 @@ mod tests {
             .expect("push failed");
         queue.push(message, None).await.expect("push failed");
 
-        let db_jobs = all_jobs(&db).await.expect("failed to fetch jobs");
+        let db_jobs = all_jobs::<Message>(&db)
+            .await
+            .expect("failed to fetch jobs");
 
-        let job_1 = &queue.pull(1).await.expect("failed to pull jobs")[0];
-        let job_2 = &queue.pull(1).await.expect("failed to pull jobs")[0];
+        let job_1 = &queue.pull::<Message>(1).await.expect("failed to pull jobs")[0];
+        let job_2 = &queue.pull::<Message>(1).await.expect("failed to pull jobs")[0];
 
         assert_eq!(db_jobs[0].id, job_1.id);
         assert_eq!(db_jobs[1].id, job_2.id);
@@ -419,10 +434,12 @@ mod tests {
             .await
             .expect("push failed");
 
-        let db_jobs = all_jobs(&db).await.expect("failed to fetch jobs");
+        let db_jobs = all_jobs::<Message>(&db)
+            .await
+            .expect("failed to fetch jobs");
 
-        let job_1 = &queue.pull(1).await.expect("failed to pull jobs")[0];
-        let job_2 = &queue.pull(1).await.expect("failed to pull jobs")[0];
+        let job_1 = &queue.pull::<Message>(1).await.expect("failed to pull jobs")[0];
+        let job_2 = &queue.pull::<Message>(1).await.expect("failed to pull jobs")[0];
 
         // Timestamps in PG have usec precision. Truncating the timestamps from
         // chrono ensures that tests won't fail because of precision mismatch on
@@ -443,7 +460,7 @@ mod tests {
             .await
             .expect("push failed");
 
-        let jobs = queue.pull(1).await.expect("failed to pull jobs");
+        let jobs = queue.pull::<Message>(1).await.expect("failed to pull jobs");
 
         assert_eq!(jobs.len(), 0);
     }
@@ -454,11 +471,13 @@ mod tests {
 
         queue.push(message, None).await.expect("push failed");
 
-        let db_job = &all_jobs(&db).await.expect("failed to fetch all jobs")[0];
+        let db_job = &all_jobs::<Message>(&db)
+            .await
+            .expect("failed to fetch all jobs")[0];
 
         queue.fail_job(db_job.id).await.expect("failed to fail job");
 
-        let job = &queue.pull(1).await.expect("failed to pull jobs")[0];
+        let job = &queue.pull::<Message>(1).await.expect("failed to pull jobs")[0];
 
         assert_eq!(job.id, db_job.id);
     }
@@ -469,15 +488,19 @@ mod tests {
 
         queue.push(message, None).await.expect("push failed");
 
-        let db_job = &all_jobs(&db).await.expect("failed to fetch all jobs")[0];
+        let db_job = &all_jobs::<Message>(&db)
+            .await
+            .expect("failed to fetch all jobs")[0];
 
         for _ in 0..queue.max_attempts {
             queue.fail_job(db_job.id).await.expect("failed to fail job");
         }
 
-        let db_job_after_fail = &all_jobs(&db).await.expect("failed to fetch all jobs")[0];
+        let db_job_after_fail = &all_jobs::<Message>(&db)
+            .await
+            .expect("failed to fetch all jobs")[0];
 
-        let jobs = &queue.pull(1).await.expect("failed to pull jobs");
+        let jobs = &queue.pull::<Message>(1).await.expect("failed to pull jobs");
 
         assert_eq!(db_job_after_fail.failed_attempts, queue.max_attempts as i32);
         assert_eq!(jobs.len(), 0);
@@ -489,15 +512,19 @@ mod tests {
 
         queue.push(message, None).await.expect("push failed");
 
-        let db_job = &all_jobs(&db).await.expect("failed to fetch all jobs")[0];
+        let db_job = &all_jobs::<Message>(&db)
+            .await
+            .expect("failed to fetch all jobs")[0];
 
         for _ in 0..queue.max_attempts + 1 {
             queue.fail_job(db_job.id).await.expect("failed to fail job");
         }
 
-        let db_job_after_fail = &all_jobs(&db).await.expect("failed to fetch all jobs")[0];
+        let db_job_after_fail = &all_jobs::<Message>(&db)
+            .await
+            .expect("failed to fetch all jobs")[0];
 
-        let jobs = &queue.pull(1).await.expect("failed to pull jobs");
+        let jobs = &queue.pull::<Message>(1).await.expect("failed to pull jobs");
 
         assert!(db_job_after_fail.failed_attempts > queue.max_attempts as i32);
         assert_eq!(jobs.len(), 0);

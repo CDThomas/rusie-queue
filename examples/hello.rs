@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{Pool, Postgres};
 use std::fmt::{Debug, Display};
+use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -32,9 +33,7 @@ async fn main() -> Result<(), anyhow::Error> {
 
     // run worker
     let worker_queue = queue.clone(); // queue is an Arc pointer, so we only copy the reference
-    tokio::spawn(async move {
-        run_worker::<Message, anyhow::Error>(worker_queue, Box::new(handle_job)).await
-    });
+    tokio::spawn(async move { run_worker(worker_queue, handle_job).await });
 
     // queue job
     let job = Message::SendSignInEmail {
@@ -50,16 +49,15 @@ async fn main() -> Result<(), anyhow::Error> {
 }
 
 // TODO: move into rusie_queue
-async fn run_worker<T, E>(
-    queue: Arc<PostgresQueue>,
-    // TODO: How to handle async fns, too?
-    handler: Box<dyn Fn(PostgresJob<T>) -> Result<(), E> + Send + Sync + 'static>,
-) where
-    T: Serialize + DeserializeOwned + Unpin + Send + 'static,
+async fn run_worker<M, E, F, Fut>(queue: Arc<PostgresQueue>, handler: F)
+where
+    M: Serialize + DeserializeOwned + Unpin + Send + 'static,
     E: Display,
+    F: Fn(PostgresJob<M>) -> Fut + Send + Sync + 'static,
+    Fut: Future<Output = Result<(), E>>,
 {
     loop {
-        let jobs = match queue.pull::<T>(CONCURRENCY as u32).await {
+        let jobs = match queue.pull::<M>(CONCURRENCY as u32).await {
             Ok(jobs) => jobs,
             Err(err) => {
                 println!("run_worker: pulling jobs: {}", err);
@@ -77,7 +75,7 @@ async fn run_worker<T, E>(
             .for_each_concurrent(CONCURRENCY, |job| async {
                 let job_id = job.id;
 
-                let res = match handler(job) {
+                let res = match handler(job).await {
                     Ok(_) => queue.delete_job(job_id).await,
                     Err(err) => {
                         println!("run_worker: handling job({}): {}", job_id, &err);
@@ -99,7 +97,7 @@ async fn run_worker<T, E>(
     }
 }
 
-fn handle_job(job: PostgresJob<Message>) -> Result<(), anyhow::Error> {
+async fn handle_job(job: PostgresJob<Message>) -> Result<(), anyhow::Error> {
     match job.message.0 {
         message @ Message::SendSignInEmail { .. } => {
             println!("Sending sign in email: {:?}", &message);

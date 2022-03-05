@@ -5,9 +5,20 @@
 
 ## Examples
 
+First, make sure that Postgres is running:
 ```
-$ docker-compose up -d # Start PG
-$ cargo run --example hello
+$ docker-compose up -d
+```
+
+Next, start the worker:
+```
+$ cargo run --example hello worker
+```
+
+Finally, you can push messages to the worker:
+```
+$ cargo run --example hello push # Push and use default name to print
+$ cargo run --example hello push Rust Ferris # Push with list of names to print
 ```
 
 ## Development

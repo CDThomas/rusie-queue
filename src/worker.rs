@@ -4,12 +4,11 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 use std::fmt::Display;
 use std::future::Future;
-use std::sync::Arc;
 use std::time::Duration;
 
 const CONCURRENCY: usize = 50;
 
-pub async fn run<M, E, F, Fut>(queue: Arc<PostgresQueue>, handler: F)
+pub async fn run<M, E, F, Fut>(queue: PostgresQueue, handler: F)
 where
     M: Serialize + DeserializeOwned + Unpin + Send + 'static,
     E: Display,
@@ -28,7 +27,7 @@ where
 
         let number_of_jobs = jobs.len();
         if number_of_jobs > 0 {
-            println!("Fetched {} jobs", number_of_jobs);
+            println!("Fetched {} job(s)", number_of_jobs);
         }
 
         stream::iter(jobs)

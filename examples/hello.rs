@@ -1,11 +1,23 @@
+use clap::{Parser, Subcommand};
 use rusie_queue::error::Error;
 use rusie_queue::postgres::{PostgresJob, PostgresQueue};
 use rusie_queue::worker;
 use serde::{Deserialize, Serialize};
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{Pool, Postgres};
-use std::sync::Arc;
 use std::time::Duration;
+
+#[derive(Parser)]
+struct Cli {
+    #[clap(subcommand)]
+    command: Commands,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    Push { names: Vec<String> },
+    Worker,
+}
 
 #[derive(Serialize, Deserialize)]
 pub enum Message {
@@ -14,24 +26,36 @@ pub enum Message {
 
 #[tokio::main]
 async fn main() -> Result<(), anyhow::Error> {
+    let cli = Cli::parse();
+
     let database_url = std::env::var("DATABASE_URL")
         .map_err(|_| Error::BadConfig("DATABASE_URL env var is missing".to_string()))?;
 
     let db = connect(&database_url).await?;
+
     migrate(&db).await?;
 
-    let queue = Arc::new(PostgresQueue::new(db.clone()).max_attempts(3));
+    let queue = PostgresQueue::new(db.clone()).max_attempts(3);
 
-    let worker_queue = queue.clone();
-    tokio::spawn(async move { worker::run(worker_queue, handle_job).await });
+    match cli.command {
+        Commands::Push { names } => {
+            if names.is_empty() {
+                let message = Message::SayHello {
+                    name: "Rusie Q".to_string(),
+                };
 
-    let job = Message::SayHello {
-        name: "Rusie Q".to_string(),
-    };
-
-    queue.push(job, None).await?;
-
-    tokio::time::sleep(Duration::from_secs(2)).await;
+                queue.push(message, None).await?;
+            } else {
+                for name in names {
+                    queue.push(Message::SayHello { name }, None).await?
+                }
+            }
+        }
+        Commands::Worker => {
+            println!("Starting worker and waiting for messages...");
+            worker::run(queue, handle_job).await;
+        }
+    }
 
     Ok(())
 }

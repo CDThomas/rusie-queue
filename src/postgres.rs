@@ -37,12 +37,10 @@ pub enum PostgresJobStatus {
 
 impl PostgresQueue {
     pub fn new(db: DB) -> PostgresQueue {
-        let queue = PostgresQueue {
+        PostgresQueue {
             db,
             max_attempts: DEFAULT_MAX_ATTEMPTS,
-        };
-
-        queue
+        }
     }
 
     pub fn max_attempts(mut self, max_attempts: u32) -> Self {
@@ -57,7 +55,7 @@ impl PostgresQueue {
         job: A,
         date: Option<chrono::DateTime<chrono::Utc>>,
     ) -> Result<(), Error> {
-        let scheduled_for = date.unwrap_or(chrono::Utc::now());
+        let scheduled_for = date.unwrap_or_else(chrono::Utc::now);
         let failed_attempts: i32 = 0;
         let message = Json(job);
         let status = PostgresJobStatus::Queued;
@@ -221,7 +219,7 @@ mod tests {
     #[tokio::test]
     async fn test_new_sets_default_max_attempts() {
         let db = setup_db().await;
-        let queue = PostgresQueue::new(db.clone());
+        let queue = PostgresQueue::new(db);
 
         assert_eq!(queue.max_attempts, DEFAULT_MAX_ATTEMPTS);
     }
@@ -231,7 +229,7 @@ mod tests {
         let db = setup_db().await;
         let max_attempts = DEFAULT_MAX_ATTEMPTS + 1;
 
-        let queue = PostgresQueue::new(db.clone()).max_attempts(max_attempts);
+        let queue = PostgresQueue::new(db).max_attempts(max_attempts);
 
         assert_eq!(queue.max_attempts, max_attempts);
     }
@@ -240,9 +238,9 @@ mod tests {
     async fn test_push_succeeds() {
         let Context { queue, message, .. } = setup().await;
 
-        let result = queue.push(message, None).await.expect("push failed");
+        let result = queue.push(message, None).await;
 
-        assert_eq!(result, ());
+        assert!(result.is_ok());
     }
 
     #[tokio::test]

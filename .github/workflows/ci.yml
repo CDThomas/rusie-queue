@@ -48,3 +48,8 @@ jobs:
 
     - name: Check examples
       run: cargo check --examples
+
+    - name: Lint
+      run: |
+        rustup component add clippy
+        cargo clippy --all-targets --all-features -- -D warnings
